@@ -1,0 +1,23 @@
+version: "3.8"
+
+services:
+  datero-web-b:
+    build: .
+    image: datero-web-b:latest
+    container_name: datero-web-b
+    restart: unless-stopped
+    environment:
+      - TZ=America/Lima
+      - MODO_SERVICIO=true
+    ports:
+      - "127.0.0.1:3013:5003"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  default:
+    name: app-net
+    external: true

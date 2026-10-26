@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Microsoft.AspNetCore.SignalR.Client;
 using DateroWebB.API;
 using DateroWebB.Models;
@@ -91,7 +92,69 @@ public class Program
             Console.WriteLine("   (No es crítico, se usará solo la API HTTP)\n");
         }
 
-        await MenuPrincipal();
+        bool modoServicio = Console.IsInputRedirected ||
+            string.Equals(Environment.GetEnvironmentVariable("MODO_SERVICIO"), "true", StringComparison.OrdinalIgnoreCase);
+
+        if (modoServicio)
+        {
+            await EjecutarModoServicio();
+        }
+        else
+        {
+            await MenuPrincipal();
+        }
+    }
+
+    private static async Task EjecutarModoServicio()
+    {
+        Console.WriteLine("✓ Ejecutando en MODO SERVICIO (sin menú interactivo). Esperando señales SIGTERM / Ctrl+C para detener...\n");
+
+        using var cts = new CancellationTokenSource();
+
+        Console.CancelKeyPress += (_, e) =>
+        {
+            e.Cancel = true;
+            try { cts.Cancel(); } catch (ObjectDisposedException) { }
+        };
+
+        PosixSignalRegistration? sigtermRegistration = null;
+        try
+        {
+            sigtermRegistration = PosixSignalRegistration.Create(PosixSignal.SIGTERM, ctx =>
+            {
+                ctx.Cancel = true;
+                try { cts.Cancel(); } catch (ObjectDisposedException) { }
+            });
+        }
+        catch (Exception)
+        {
+            // Ignorar si el entorno no soporta el registro directo de SIGTERM
+        }
+
+        AppDomain.CurrentDomain.ProcessExit += (_, _) =>
+        {
+            try { cts.Cancel(); } catch (ObjectDisposedException) { }
+        };
+
+        try
+        {
+            while (!cts.Token.IsCancellationRequested)
+            {
+                await Task.Delay(TimeSpan.FromMinutes(10), cts.Token);
+                var estadoHub = _despachoConnection?.State == HubConnectionState.Connected ? "Conectado" : "Desconectado";
+                Console.WriteLine($"[ESTADO {DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hub Despacho: {estadoHub} | Monitoreos activos: {_monitoreosActivos.Count}");
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Señal de parada recibida (SIGTERM o Ctrl+C)
+        }
+        finally
+        {
+            sigtermRegistration?.Dispose();
+        }
+
+        await CerrarAplicacionAsync();
     }
 
     private static async Task<bool> IniciarMonitoreoAsync(IniciarMonitoreoRequest datos)
@@ -316,7 +379,7 @@ public class Program
         Console.WriteLine("════════════════════════════════════════\n");
     }
 
-    private static async Task Salir()
+    private static async Task CerrarAplicacionAsync()
     {
         Console.WriteLine("\n🛑 Cerrando aplicación...");
 
@@ -329,6 +392,11 @@ public class Program
             await _despachoConnection.StopAsync();
 
         Console.WriteLine("✓ Aplicación cerrada correctamente");
+    }
+
+    private static async Task Salir()
+    {
+        await CerrarAplicacionAsync();
         Console.WriteLine("Presione una tecla para salir...");
         Console.ReadKey();
     }
